@@ -175,7 +175,6 @@ class FastoranApi(private val activity: ComponentActivity) {
             val totalProducts = c.raw.optInt("products_count", products.length())
             c.raw.put("_has_more", totalProducts > products.length())
             c.raw.put("_loading_more", false)
-            c.raw.put("_last_product_id", c.raw.opt("last_product_id") ?: lastProductId(products))
             c
         }
     }
