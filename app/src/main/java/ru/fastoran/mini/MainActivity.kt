@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -180,7 +181,7 @@ class FastoranApi(private val activity: ComponentActivity) {
         val lastId = if (products.length() > 0) products.optJSONObject(products.length() - 1)?.optString("id") else null
         val categoryId = category.id
         // Партнёрский маршрут мобильного API; параметры соответствуют курсорной пагинации backend.
-        val url = HttpUrl.parse(base + "/partners/products-by-category/more")!!.newBuilder()
+        val url = (base + "/partners/products-by-category/more").toHttpUrl().newBuilder()
             .addQueryParameter("category_id", categoryId)
             .addQueryParameter("last_product_id", lastId?.takeIf { it.isNotBlank() })
             .addQueryParameter("partner_id", partnerId)
