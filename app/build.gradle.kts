@@ -3,8 +3,9 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
-val apiBaseUrl = (project.findProperty("FASTORAN_API_BASE_URL") as String?) ?: "https://example.com/api/mobile/v1/"
-val tenantKey = (project.findProperty("FASTORAN_TENANT_KEY") as String?) ?: "SET_TENANT_KEY"
+val apiBaseUrl = (project.findProperty("FASTORAN_API_BASE_URL") as String?) ?: "https://example.com"
+val tenantKey = (project.findProperty("FASTORAN_TENANT_KEY") as String?) ?: ""
+val tenantSlug = (project.findProperty("FASTORAN_TENANT_SLUG") as String?) ?: ""
 android {
     namespace = "ru.fastoran.mini"
     compileSdk = 35
@@ -16,6 +17,7 @@ android {
         versionName = "1.0.0"
         buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
         buildConfigField("String", "TENANT_KEY", "\"$tenantKey\"")
+        buildConfigField("String", "TENANT_SLUG", "\"$tenantSlug\"")
         buildConfigField("String", "APP_NAME", "\"Фасторан.Мини\"")
     }
     buildFeatures { compose = true; buildConfig = true }
