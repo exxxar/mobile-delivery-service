@@ -22,37 +22,39 @@ jobs:
     name: Build Fastoran Mini
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
-      # Получение исходного кода
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Установка Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      # Настройка Android SDK
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK
+        run: |
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
 
-      # Установка необходимых Android SDK пакетов
       - name: Install Android SDK packages
         run: |
+          yes | sdkmanager --licenses || true
+
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # Настройка Gradle
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      # Сборка APK
       - name: Build Debug APK
         env:
           FASTORAN_API_BASE_URL: ${{ secrets.FASTORAN_API_BASE_URL }}
@@ -63,18 +65,17 @@ jobs:
             -PFASTORAN_TENANT_KEY="${FASTORAN_TENANT_KEY:-SET_TENANT_KEY}" \
             assembleDebug
 
-      # Проверка наличия APK
       - name: Verify APK
         run: |
-          if [ ! -f app/build/outputs/apk/debug/app-debug.apk ]; then
-            echo "ERROR: APK file was not generated!"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "APK was not generated"
             exit 1
           fi
 
-          echo "APK successfully generated."
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
+          ls -lh "$APK"
 
-      # Загрузка APK в GitHub Actions Artifacts
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
