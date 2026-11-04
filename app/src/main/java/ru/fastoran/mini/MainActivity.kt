@@ -1,6 +1,9 @@
 package ru.fastoran.mini
 
 import android.os.Bundle
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -170,7 +173,7 @@ class FastoranApi(private val activity: ComponentActivity) {
             // Если сервер не прислал флаг, но вернул непустую первую страницу,
             // кнопку дозагрузки показываем только при явном has_more=true.
             val totalProducts = c.raw.optInt("products_count", products.length())
-            c.raw.put("_has_more", c.raw.optBoolean("has_more", totalProducts > products.length()))
+            c.raw.put("_has_more", totalProducts > products.length())
             c.raw.put("_loading_more", false)
             c.raw.put("_last_product_id", c.raw.opt("last_product_id") ?: lastProductId(products))
             c
@@ -178,29 +181,26 @@ class FastoranApi(private val activity: ComponentActivity) {
     }
     suspend fun loadMoreProducts(partnerId: String, category: ApiItem) = withContext(Dispatchers.IO) {
         val products = category.raw.optJSONArray("_products") ?: JSONArray()
-        val lastId = if (products.length() > 0) products.optJSONObject(products.length() - 1)?.optString("id") else null
-        val categoryId = category.id
-        // Партнёрский маршрут мобильного API; параметры соответствуют курсорной пагинации backend.
+        val offset = products.length()
         val url = (base + "/partners/products-by-category/more").toHttpUrl().newBuilder()
-            .addQueryParameter("category_id", categoryId)
-            .addQueryParameter("last_product_id", lastId?.takeIf { it.isNotBlank() })
+            .addQueryParameter("category_id", category.id)
             .addQueryParameter("partner_id", partnerId)
-            .addQueryParameter("limit", "12")
+            .addQueryParameter("offset", offset.toString())
             .build()
-        val request = Request.Builder().url(url).header("Accept", "application/json").header("X-Requested-With", "XMLHttpRequest").apply {
-            if (BuildConfig.TENANT_KEY.isNotBlank() && BuildConfig.TENANT_KEY != "SET_TENANT_KEY") header("X-Tenant-Key", BuildConfig.TENANT_KEY)
-        }.get().build()
-        val response = client.newCall(request).execute()
-        val body = response.body?.string().orEmpty()
-        if (!response.isSuccessful) throw IOException("HTTP ${response.code}: $body")
-        val result = try { JSONObject(body) } catch (_: Exception) { JSONObject() }
-        val newItems = extractItems(result, listOf("data", "products"))
-        val dataNode = result.optJSONObject("data") ?: result
-        JSONObject().put("items", JSONArray().also { a -> newItems.forEach { a.put(it.raw) } })
-            .put("has_more", dataNode.optBoolean("has_more", result.optBoolean("has_more", false)))
-            .put("last_product_id", dataNode.opt("last_product_id") ?: JSONObject.NULL)
+        val request = Request.Builder().url(url).header("Accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest").apply {
+                if (BuildConfig.TENANT_KEY.isNotBlank() && BuildConfig.TENANT_KEY != "SET_TENANT_KEY") header("X-Tenant-Key", BuildConfig.TENANT_KEY)
+            }.get().build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}: $body")
+            val result = try { JSONObject(body) } catch (_: Exception) { JSONObject() }
+            val newItems = extractItems(result, listOf("data", "products"))
+            JSONObject().put("items", JSONArray().also { a -> newItems.forEach { a.put(it.raw) } })
+                .put("has_more", newItems.size >= 20)
+                .put("next_offset", offset + newItems.size)
+        }
     }
-    private fun lastProductId(products: JSONArray): Any? = products.optJSONObject(products.length() - 1)?.opt("id")
     suspend fun addProduct(productId: String) = withContext(Dispatchers.IO) { call("POST", "/basket/add-product", JSONObject().put("product_id", productId).put("count", 1)) }
     suspend fun basket() = withContext(Dispatchers.IO) { call("POST", "/basket/") }
     suspend fun changeCount(id: String, inc: Boolean) = withContext(Dispatchers.IO) { call("POST", "/basket/${if (inc) "increment" else "decrement"}/$id") }
@@ -227,7 +227,7 @@ class FastoranApi(private val activity: ComponentActivity) {
             }; return null
         }
         val arr = find(root) ?: JSONArray()
-        return (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let { o -> ApiItem(o.optString("id", o.optString("basket_id", o.optJSONObject("product")?.optString("id", "") ?: "")), o.optString("name", o.optString("title", o.optJSONObject("product")?.optString("name", "Товар") ?: "Товар")), o.optString("description", o.optJSONObject("product")?.optString("description", "") ?: ""), o.optString("price", o.optString("total_price", o.optJSONObject("product")?.optString("price", "") ?: "")), raw = o) } }
+        return (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let { o -> ApiItem(o.optString("basket_id", o.optString("id", "")), o.optString("name", o.optString("title", o.optJSONObject("product")?.optString("name", "Товар") ?: "Товар")), o.optString("description", o.optJSONObject("product")?.optString("description", "") ?: ""), o.optString("final_price", o.optString("price", o.optString("total_price", ""))), raw = o) } }
     }
 }
 
@@ -281,7 +281,7 @@ fun FastoranRoot(api: FastoranApi) {
                     LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(categories.filter { c ->
                             val a = c.raw.optJSONArray("_products") ?: JSONArray()
-                            a.length() > 0 || c.raw.optBoolean("_has_more", false)
+                            a.length() > 0
                         }, key = { it.id }) { c ->
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(c.title, style = MaterialTheme.typography.titleLarge)
@@ -309,7 +309,8 @@ fun FastoranRoot(api: FastoranApi) {
                                         }
                                     }
                                 }
-                                if (c.raw.optBoolean("_has_more", false)) {
+                                val totalCount = c.raw.optInt("products_count", arr.length())
+                                if (arr.length() > 0 && arr.length() < totalCount) {
                                     var loadingMore by remember(c.id) { mutableStateOf(false) }
                                     OutlinedButton(
                                         enabled = !loadingMore,
@@ -326,8 +327,7 @@ fun FastoranRoot(api: FastoranApi) {
                                                         if (seen.add(item.optString("id"))) current.put(item)
                                                     }
                                                     c.raw.put("_products", current)
-                                                    c.raw.put("_has_more", page.optBoolean("has_more", false))
-                                                    c.raw.put("_last_product_id", page.opt("last_product_id") ?: JSONObject.NULL)
+                                                    c.raw.put("_has_more", current.length() < totalCount)
                                                 } finally { loadingMore = false }
                                             }
                                         }, modifier = Modifier.fillMaxWidth()
@@ -362,20 +362,48 @@ fun FastoranRoot(api: FastoranApi) {
 
 @Composable
 fun CheckoutForm(api: FastoranApi, onDone: () -> Unit, onBack: () -> Unit, onError: (String) -> Unit) {
-    var address by remember { mutableStateOf("") }; var name by remember { mutableStateOf("") }; var phone by remember { mutableStateOf("") }; var comment by remember { mutableStateOf("") }
-    var needPickup by remember { mutableStateOf(false) }; var paymentType by remember { mutableStateOf("cash") }; var loading by remember { mutableStateOf(false) }; val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var address by remember { mutableStateOf("") }
+    var name by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var comment by remember { mutableStateOf("") }
+    var lat by remember { mutableStateOf<Double?>(null) }
+    var lng by remember { mutableStateOf<Double?>(null) }
+    var needPickup by remember { mutableStateOf(false) }
+    var paymentType by remember { mutableStateOf("cash") }
+    var loading by remember { mutableStateOf(false) }
+    var deliveryPrice by remember { mutableStateOf<Double?>(null) }
+    val scope = rememberCoroutineScope()
+    val mapLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val data = result.data
+            lat = data?.getDoubleExtra(MapPickerActivity.EXTRA_LAT, Double.NaN)?.takeUnless { it.isNaN() }
+            lng = data?.getDoubleExtra(MapPickerActivity.EXTRA_LNG, Double.NaN)?.takeUnless { it.isNaN() }
+            address = data?.getStringExtra(MapPickerActivity.EXTRA_ADDRESS).orEmpty().ifBlank { address }
+            deliveryPrice = null
+        }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(androidx.compose.foundation.rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Оформление заказа", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(name, { name = it }, label = { Text("Имя") }, modifier = Modifier.fillMaxWidth())
         OutlinedTextField(phone, { phone = it }, label = { Text("Телефон") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(address, { address = it }, label = { Text("Адрес доставки") }, modifier = Modifier.fillMaxWidth())
+        Text("Адрес доставки", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(address, { address = it }, label = { Text("Адрес по карте") }, modifier = Modifier.fillMaxWidth(), readOnly = true)
+        OutlinedButton(onClick = { mapLauncher.launch(Intent(context, MapPickerActivity::class.java)) }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (lat != null && lng != null) "Изменить точку на карте" else "Выбрать адрес на карте")
+        }
+        if (lat != null && lng != null) {
+            Text("Координаты: ${"%.6f".format(lat)}, ${"%.6f".format(lng)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else if (!needPickup) {
+            Text("Для доставки обязательно выберите точку на карте", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
         OutlinedTextField(comment, { comment = it }, label = { Text("Комментарий") }, modifier = Modifier.fillMaxWidth())
         Text("Получение")
         Row { FilterChip(selected = !needPickup, onClick = { needPickup = false }, label = { Text("Доставка") }); Spacer(Modifier.width(8.dp)); FilterChip(selected = needPickup, onClick = { needPickup = true }, label = { Text("Самовывоз") }) }
         Text("Оплата")
         Row { FilterChip(selected = paymentType == "cash", onClick = { paymentType = "cash" }, label = { Text("Наличными") }); Spacer(Modifier.width(8.dp)); FilterChip(selected = paymentType == "sbp", onClick = { paymentType = "sbp" }, label = { Text("СБП") }) }
-        Spacer(Modifier.weight(1f))
-        Button(enabled = !loading && name.isNotBlank() && phone.isNotBlank() && (needPickup || address.isNotBlank()), onClick = {
+        deliveryPrice?.let { Text("Стоимость доставки: ${"%.2f".format(it)} ₽", color = MaterialTheme.colorScheme.primary) }
+        Button(enabled = !loading && name.isNotBlank() && phone.isNotBlank() && (needPickup || (address.isNotBlank() && lat != null && lng != null)), onClick = {
             loading = true
             scope.launch { try {
                 val payload = JSONObject()
@@ -386,17 +414,22 @@ fun CheckoutForm(api: FastoranApi, onDone: () -> Unit, onBack: () -> Unit, onErr
                     .put("payment_type", if (paymentType == "sbp") 4 else 3)
                     .put("cash", paymentType == "cash").put("persons", 1)
                     .put("when_ready", true).put("time", JSONObject.NULL)
-                    .put("delivery_price", 0).put("distance", 0).put("delivery_details", JSONArray())
-                    .put("location_id", JSONObject.NULL).put("lng", JSONObject.NULL).put("lat", JSONObject.NULL)
+                    .put("delivery_price", 0).put("distance", 0).put("delivery_details", JSONObject())
+                    .put("location_id", JSONObject.NULL).put("lng", lng ?: JSONObject.NULL).put("lat", lat ?: JSONObject.NULL)
                     .put("discount", 0).put("use_cashback", false).put("has_disability", false)
                     .put("disabilities", JSONArray()).put("money", JSONObject.NULL).put("allergy", JSONObject.NULL)
                     .put("action_prize", JSONObject.NULL)
                 if (!needPickup) {
-                    val deliveryResult = api.delivery(payload)
-                    // Keep the server's resolved delivery quote in the checkout payload when returned.
-                    if (deliveryResult.has("price")) payload.put("delivery_price", deliveryResult.opt("price"))
-                    if (deliveryResult.has("distance")) payload.put("distance", deliveryResult.opt("distance"))
-                    if (deliveryResult.has("config")) payload.put("delivery_details", deliveryResult.opt("config"))
+                    // Веб-клиент отправляет в get-delivery-price-new ровно address, lat, lng.
+                    val quote = api.delivery(JSONObject().put("address", address).put("lat", lat).put("lng", lng))
+                    val price = quote.optDouble("price", 0.0)
+                    val distance = quote.optDouble("distance", 0.0)
+                    payload.put("delivery_price", price).put("distance", distance)
+                    val details = quote.opt("config")
+                    if (details != null && details != JSONObject.NULL) payload.put("delivery_details", details)
+                    // Адрес/координаты должны остаться в checkout даже если расчёт вернул неполный ответ.
+                    payload.put("address", address).put("lat", lat).put("lng", lng)
+                    deliveryPrice = price
                 }
                 val result = api.checkout(payload)
                 if (result.optBoolean("success", false)) onDone() else onError(result.optString("message", "Сервер не подтвердил создание заказа"))

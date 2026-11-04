@@ -41,4 +41,6 @@ Workflow: `.github/workflows/android.yml`. После push в `main`/`master` и
 
 Структура `deliveryForm` повторяет поля, найденные в присланном `CartPage.vue`: `name`, `phone`, `address`, `location_id`, `lng`, `lat`, `city`, `street`, `building`, `flat_number`, `entrance_number`, `floor_number`, `info`, `need_pickup`, `pick_up_type`, `payment_type`, `cash`, `persons`, `time`, `when_ready`, `delivery_price`, `distance`, `delivery_details` и связанные параметры. Значения способов оплаты взяты из веб-версии: СБП — `4`, наличные — `3`. Сервер остаётся источником окончательного расчёта.
 
-Для адресов с координатами приложение пока предоставляет простое текстовое поле; геокодирование и выбор сохранённого адреса в эту компактную версию не включены. Если backend требует `lat/lng` или `location_id` для расчёта доставки, их необходимо получить через существующий адресный компонент/API веб-версии.
+В оформлении заказа открывается отдельная `MapPickerActivity` на OpenStreetMap/osmdroid — та же библиотека и тайлы MAPNIK, что и в Android-приложении доставщика. Пользователь выбирает точку касанием по карте или кнопкой «Моё местоположение». Адрес определяется через Android Geocoder, а координаты `lat`/`lng` передаются в расчёт и checkout.
+
+Метод `POST /basket/get-delivery-price-new` вызывается с точным payload веб-клиента: `address`, `lat`, `lng`. Ответ использует поля `price`, `distance`, `config`; они переносятся в `delivery_price`, `distance`, `delivery_details` при оформлении заказа. Для доставки выбор точки обязателен.
